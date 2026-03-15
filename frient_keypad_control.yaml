@@ -1,14 +1,12 @@
 blueprint:
-  name: Frient KEPZB-110 Keypad for Alarmo (LED Sync Fix)
+  name: Frient KEPZB-110 Keypad for Alarmo (Fixed)
   description: |
-    Manage multiple PIN codes and RFID badges to arm/disarm Alarmo using the Frient Keypad.
+    Manage PIN codes and RFID badges to arm/disarm Alarmo using the Frient Keypad.
 
-    Fork of Darktoinon's blueprint with critical fixes:
-    - LED false-positive fix: Immediately reverts keypad LEDs when codes are invalid/missing
-    - Pre-validation of codes before attempting Alarmo actions
-    - Prevents "lockout" state where keypad LED doesn't match Alarmo state
-
-    You must create the same PIN/RFID codes in Alarmo users.
+    Features:
+    - LED sync fix: Reverts keypad LEDs when codes are invalid
+    - Pre-validation of codes before Alarmo actions
+    - Syncs keypad state with Alarmo state changes
   domain: automation
   input:
     keypad:
@@ -32,37 +30,35 @@ blueprint:
           domain: alarm_control_panel
     pin_list:
       name: Valid PIN Codes
-      description: List of valid PIN codes for arming/disarming, separated by semicolons
+      description: List of valid PIN codes, separated by semicolons
       default: ""
       selector:
         text: {}
     rfid_list:
       name: RFID List
-      description: List of valid RFID identifiers (with + prefix), separated by semicolons. Example +A1B2C3D4;+12345678
+      description: List of valid RFID identifiers (with + prefix), separated by semicolons
       default: ""
       selector:
         text: {}
     default_pin:
       name: ZHA Keypad Code (for LED sync)
-      description: The default PIN code configured in ZHA integration settings (Settings > ZHA > Configure > Keypad). Used only for LED state synchronization.
+      description: The PIN configured in ZHA settings for the keypad
       default: "0000"
       selector:
         text: {}
     mirror_default_pin:
       name: Default PIN for Alarmo
-      description: Fallback PIN code to use for Alarmo if needed (usually same as ZHA code)
+      description: Fallback PIN for Alarmo operations
       default: "0000"
       selector:
         text: {}
     require_code_for_arm:
       name: Require Code for Arming
-      description: If enabled, requires a valid PIN/RFID to arm the system
       default: true
       selector:
         boolean: {}
     require_code_for_disarm:
       name: Require Code for Disarming
-      description: If enabled, requires a valid PIN/RFID to disarm (strongly recommended for security)
       default: true
       selector:
         boolean: {}
@@ -85,45 +81,9 @@ variables:
   rfid_list_var: !input rfid_list
   rfid_list: "{{ rfid_list_var.split(';') | map('trim') | select('!=', '') | list }}"
   all_valid_codes: "{{ pin_list + rfid_list }}"
-
   mirror_default_pin: !input mirror_default_pin
   require_arm: !input require_code_for_arm
   require_disarm: !input require_code_for_disarm
-
-  # Extract data from ZHA event
-  entered_code: "{{ trigger.event.data.args.code | default('') | trim }}"
-  arm_mode: "{{ trigger.event.data.args.arm_mode | default(-1) | int }}"
-
-  # Determine action type
-  action_type: >
-    {% if arm_mode == 0 %}
-      disarm
-    {% elif arm_mode == 1 %}
-      arm_home
-    {% elif arm_mode == 2 %}
-      arm_night
-    {% elif arm_mode == 3 %}
-      arm_away
-    {% else %}
-      unknown
-    {% endif %}
-
-  # Check if code is valid
-  is_code_valid: "{{ entered_code in all_valid_codes and entered_code != '' }}"
-  is_code_provided: "{{ entered_code != '' }}"
-
-  # Determine if we should execute the action
-  should_execute: >
-    {% if action_type == 'disarm' %}
-      {{ not require_disarm or is_code_valid }}
-    {% elif action_type in ['arm_home', 'arm_night', 'arm_away'] %}
-      {{ not require_arm or is_code_valid }}
-    {% else %}
-      false
-    {% endif %}
-
-  # Current alarm state for reference
-  alarm_state: "{{ states(mirror_alarm_panel) }}"
 
 condition: []
 
@@ -136,22 +96,27 @@ action:
           - condition: template
             value_template: "{{ trigger.event.data.command == 'arm' }}"
         sequence:
+          - variables:
+              entered_code: "{{ trigger.event.data.args.code | default('') | trim }}"
+              arm_mode: "{{ trigger.event.data.args.arm_mode | default(-1) | int }}"
           - choose:
-              # --- VALID CODE: Execute arm/disarm ---
-              - conditions: "{{ should_execute }}"
+              # DISARM
+              - conditions:
+                  - condition: template
+                    value_template: "{{ arm_mode == 0 }}"
+                  - condition: state
+                    entity_id: !input alarm_panel
+                    state:
+                      - "armed_home"
+                      - "armed_away"
+                      - "armed_night"
+                      - "triggered"
                 sequence:
                   - choose:
-                      # DISARM
+                      # Valid code or code not required - proceed with disarm
                       - conditions:
                           - condition: template
-                            value_template: "{{ action_type == 'disarm' }}"
-                          - condition: state
-                            entity_id: !input alarm_panel
-                            state: 
-                              - "armed_home"
-                              - "armed_away"
-                              - "armed_night"
-                              - "triggered"
+                            value_template: "{{ not require_disarm or (entered_code in all_valid_codes and entered_code != '') }}"
                         sequence:
                           - service: alarm_control_panel.alarm_disarm
                             target:
@@ -162,12 +127,30 @@ action:
                             target:
                               entity_id: !input mirror_alarm_panel
                             data:
-                              code: "{{ entered_code }}"
-
-                      # ARM HOME
+                              code: "{{ entered_code if entered_code != '' else mirror_default_pin }}"
+                      # Invalid code - revert LED to armed state
                       - conditions:
                           - condition: template
-                            value_template: "{{ action_type == 'arm_home' }}"
+                            value_template: "{{ require_disarm and (entered_code not in all_valid_codes or entered_code == '') }}"
+                        sequence:
+                          - delay:
+                              milliseconds: 100
+                          - service: alarm_control_panel.alarm_arm_away
+                            target:
+                              entity_id: !input alarm_panel
+                            data:
+                              code: !input default_pin
+                    default: []
+
+              # ARM HOME
+              - conditions:
+                  - condition: template
+                    value_template: "{{ arm_mode == 1 }}"
+                sequence:
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ not require_arm or (entered_code in all_valid_codes and entered_code != '') }}"
                         sequence:
                           - service: alarm_control_panel.alarm_arm_home
                             target:
@@ -178,62 +161,13 @@ action:
                             target:
                               entity_id: !input mirror_alarm_panel
                             data:
-                              code: "{{ entered_code }}"
-
-                      # ARM NIGHT
+                              code: "{{ entered_code if entered_code != '' else mirror_default_pin }}"
                       - conditions:
                           - condition: template
-                            value_template: "{{ action_type == 'arm_night' }}"
+                            value_template: "{{ require_arm and (entered_code not in all_valid_codes or entered_code == '') }}"
                         sequence:
-                          - service: alarm_control_panel.alarm_arm_night
-                            target:
-                              entity_id: !input alarm_panel
-                            data:
-                              code: !input default_pin
-                          - service: alarm_control_panel.alarm_arm_night
-                            target:
-                              entity_id: !input mirror_alarm_panel
-                            data:
-                              code: "{{ entered_code }}"
-
-                      # ARM AWAY
-                      - conditions:
-                          - condition: template
-                            value_template: "{{ action_type == 'arm_away' }}"
-                        sequence:
-                          - service: alarm_control_panel.alarm_arm_away
-                            target:
-                              entity_id: !input alarm_panel
-                            data:
-                              code: !input default_pin
-                          - service: alarm_control_panel.alarm_arm_away
-                            target:
-                              entity_id: !input mirror_alarm_panel
-                            data:
-                              code: "{{ entered_code }}"
-                    default: []
-
-              # --- INVALID/MISSING CODE: Immediately fix LED to match reality ---
-              - conditions: "{{ not should_execute }}"
-                sequence:
-                  # Brief delay to let keypad process its optimistic LED change
-                  - delay:
-                      milliseconds: 100
-
-                  # Force keypad LED back to match actual Alarmo state
-                  - choose:
-                      # If Alarmo is armed, force keypad to armed (red LED)
-                      - conditions: "{{ states(mirror_alarm_panel) in ['armed_away', 'armed_home', 'armed_night', 'pending', 'triggered'] }}"
-                        sequence:
-                          - service: alarm_control_panel.alarm_arm_away
-                            target:
-                              entity_id: !input alarm_panel
-                            data:
-                              code: !input default_pin
-
-                      # If Alarmo is disarmed, force keypad to disarmed (green LED)  
-                      - conditions: "{{ states(mirror_alarm_panel) == 'disarmed' }}"
-                        sequence:
+                          - delay:
+                              milliseconds: 100
                           - service: alarm_control_panel.alarm_disarm
                             target:
                               entity_id: !input alarm_panel
@@ -241,7 +175,73 @@ action:
                               code: !input default_pin
                     default: []
 
-      # === ALARMO STATE CHANGE HANDLING (Sync to Keypad) ===
+              # ARM NIGHT
+              - conditions:
+                  - condition: template
+                    value_template: "{{ arm_mode == 2 }}"
+                sequence:
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ not require_arm or (entered_code in all_valid_codes and entered_code != '') }}"
+                        sequence:
+                          - service: alarm_control_panel.alarm_arm_night
+                            target:
+                              entity_id: !input alarm_panel
+                            data:
+                              code: !input default_pin
+                          - service: alarm_control_panel.alarm_arm_night
+                            target:
+                              entity_id: !input mirror_alarm_panel
+                            data:
+                              code: "{{ entered_code if entered_code != '' else mirror_default_pin }}"
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ require_arm and (entered_code not in all_valid_codes or entered_code == '') }}"
+                        sequence:
+                          - delay:
+                              milliseconds: 100
+                          - service: alarm_control_panel.alarm_disarm
+                            target:
+                              entity_id: !input alarm_panel
+                            data:
+                              code: !input default_pin
+                    default: []
+
+              # ARM AWAY
+              - conditions:
+                  - condition: template
+                    value_template: "{{ arm_mode == 3 }}"
+                sequence:
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ not require_arm or (entered_code in all_valid_codes and entered_code != '') }}"
+                        sequence:
+                          - service: alarm_control_panel.alarm_arm_away
+                            target:
+                              entity_id: !input alarm_panel
+                            data:
+                              code: !input default_pin
+                          - service: alarm_control_panel.alarm_arm_away
+                            target:
+                              entity_id: !input mirror_alarm_panel
+                            data:
+                              code: "{{ entered_code if entered_code != '' else mirror_default_pin }}"
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ require_arm and (entered_code not in all_valid_codes or entered_code == '') }}"
+                        sequence:
+                          - delay:
+                              milliseconds: 100
+                          - service: alarm_control_panel.alarm_disarm
+                            target:
+                              entity_id: !input alarm_panel
+                            data:
+                              code: !input default_pin
+                    default: []
+
+      # === ALARMO STATE CHANGE HANDLING ===
       - conditions:
           - condition: trigger
             id: alarmo_state_change
