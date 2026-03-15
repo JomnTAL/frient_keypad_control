@@ -1,15 +1,28 @@
 blueprint:
-  name: Keypad Frient (KEPZB-110) for Alarmo by Darktoinon (FR/EN)
+  name: Keypad Frient (KEPZB-110) for Alarmo - LED Fix & Code Validation
   description: |
-    Manage multiple PIN codes to arm and disarm an alarm using the Frient Keypad, synchronizing the state with an Alarmo central or other systems. (English/French)
-    Gère plusieurs codes PIN pour armer et désarmer une alarme en utilisant le Keypad Frient, tout en synchronisant l'état avec une centrale Alarmo ou autre.
-    You will need to create the same PIN codes in Alarmo, which also supports RFID badges.
-    Il faudra créer les mêmes code pin dans Alarmo qui supporte aussi les badge RFID.
+    **Fork of Darktoinon's original with critical fixes:**
+
+    **Fixes:**
+    - **LED False-Positive Fix**: When no code/invalid code is entered, immediately reverts keypad LED to match Alarmo's actual state (prevents "visually disarmed but actually armed" lockout)
+    - **Code Validation**: Verifies PIN/RFID against authorized lists before attempting to arm/disarm
+    - **Security**: Prevents arming/disarming with empty codes (no longer falls back to default PIN for empty input)
+
+    **Features:**
+    - Manage multiple PIN codes and RFID badges
+    - Synchronize Frient keypad status with Alarmo or other alarm panels
+    - Support for arm home/night/away and disarm
+    - Bilingual (EN/FR)
+
+    **Setup Requirements:**
+    1. Create identical PIN/RFID codes in Alarmo users
+    2. Set ZHA keypad code in integration config
+    3. Enter semicolon-separated codes in blueprint inputs
   domain: automation
   input:
     language:
       name: Choose Language / Choisir la langue
-      description: "Select the language for the blueprint / Sélectionnez la langue pour le blueprint."
+      description: "Select the language for notifications / Sélectionnez la langue pour les notifications."
       selector:
         select:
           options:
@@ -18,24 +31,24 @@ blueprint:
     keypad:
       name: Frient Keypad
       description: |
-        The Frient KEPZB-110 keypad.
-        Le clavier Frient KEPZB-110.
+        The Frient KEPZB-110 keypad device (ZHA).
+        Le clavier Frient KEPZB-110 (ZHA).
       selector:
         device:
           integration: zha
     alarm_panel:
-      name: Alarm Panel
+      name: Alarm Panel (Keypad Entity)
       description: |
-        The Frient alarm panel to control.
-        Le panneau d'alarme Frient à contrôler.
+        The Frient alarm control panel entity (controls keypad LEDs).
+        L'entité alarm control panel du Frient (contrôle les LEDs).
       selector:
         entity:
           domain: alarm_control_panel
     mirror_alarm_panel:
-      name: Alarm Panel to Mirror (Alarmo or other)
+      name: Alarm Panel to Mirror (Alarmo)
       description: |
-        The alarm panel to sync with Frient (e.g., Alarmo).
-        Le panneau d'alarme à synchroniser avec Frient (ex: Alarmo).
+        Your Alarmo alarm panel entity to synchronize with.
+        Votre entité Alarmo à synchroniser.
       default: alarm_control_panel.alarmo
       selector:
         entity:
@@ -43,34 +56,44 @@ blueprint:
     pin_list:
       name: Valid PIN Codes / Codes PIN valides
       description: |
-        List of valid PIN codes for arming/disarming, separated by semicolons (;).
-        Liste des codes PIN valides pour armer/désarmer, séparés par des points-virgules (;).
+        List of valid PIN codes, separated by semicolons (;).
+        Example: 1234;5678;0000
+        Liste des codes PIN valides, séparés par des points-virgules (;).
       default: ""
       selector:
         text: {}
     rfid_list:
       name: RFID List / Liste des badges RFID
       description: |
-        A list of valid RFID identifiers that can be accepted by your keypad, separated by semicolons (;).
-        Une liste des identifiants RFID valides pouvant être acceptés par votre clavier, séparés par des points-virgules (;).
+        List of valid RFID codes (with + prefix), separated by semicolons (;).
+        Example: +A1B2C3D4;+12345678
+        Liste des codes RFID valides (avec préfixe +), séparés par des points-virgules (;).
       selector:
         text: {}
     default_pin:
-      name: Default PIN Code for Disarming Frient Keypad / Code PIN par défaut pour désarmer le Frient Keypad
+      name: Default PIN for Keypad LED Sync / Code PIN par défaut pour synchronisation LED
       description: |
-        The default PIN code to use for disarming the alarm.
-        Le code PIN par défaut à utiliser pour désarmer l'alarme.
-      default: ""
+        The ZHA keypad code (from ZHA integration config) used ONLY for LED state sync.
+        Le code configuré dans l'intégration ZHA (uniquement pour la synchro LED).
+      default: "0000"
       selector:
         text: {}
-    mirror_default_pin:
-      name: Default PIN Code for Mirrored Alarm / Code PIN par défaut pour la centrale synchronisée
+    require_code_for_arm:
+      name: Require Code for Arming / Code requis pour l'armement
       description: |
-        The default PIN code to use for syncing arming/disarming on the mirrored alarm panel (e.g., Alarmo).
-        Le code PIN par défaut à utiliser pour synchroniser l'armement/désarmement sur la centrale synchronisée (Alarmo).
-      default: ""
+        If enabled, requires a valid PIN/RFID to arm. If disabled, arming works without code.
+        Si activé, nécessite un code valide pour armer.
+      default: true
       selector:
-        text: {}
+        boolean: {}
+    require_code_for_disarm:
+      name: Require Code for Disarming / Code requis pour le désarmement
+      description: |
+        If enabled, requires a valid PIN/RFID to disarm (strongly recommended for security).
+        Si activé, nécessite un code valide pour désarmer (recommandé pour la sécurité).
+      default: true
+      selector:
+        boolean: {}
 
 trigger:
   - platform: event
@@ -80,7 +103,6 @@ trigger:
       command: arm
     id: keypad_event
 
-  # Trigger for Alarmo state change
   - platform: state
     entity_id: !input mirror_alarm_panel
     id: alarmo_state_change
@@ -88,78 +110,150 @@ trigger:
 variables:
   language: !input language
   pin_list_var: !input pin_list
-  pin_list: "{{ pin_list_var.split(';') }}"
+  pin_list: "{{ pin_list_var.split(';') | map('trim') | select('!=', '') | list }}"
   rfid_list_var: !input rfid_list
-  rfid_list: "{{ rfid_list_var.split(';') }}"
-  mirror_default_pin: !input mirror_default_pin
+  rfid_list: "{{ rfid_list_var.split(';') | map('trim') | select('!=', '') | list }}"
+  all_valid_codes: "{{ pin_list + rfid_list }}"
 
-# Translation for English and French messages
+  # Get entered code from event
+  entered_code: "{{ trigger.event.data.args.code | default('') | trim }}"
+  arm_mode: "{{ trigger.event.data.args.arm_mode | default(-1) | int }}"
+
+  # Validation
+  is_code_provided: "{{ entered_code != '' }}"
+  is_code_valid: "{{ entered_code in all_valid_codes }}"
+
+  # Check requirements
+  require_arm: !input require_code_for_arm
+  require_disarm: !input require_code_for_disarm
+
+  # Determine action type
+  action_type: >
+    {% if arm_mode == 0 %}
+      disarm
+    {% elif arm_mode == 1 %}
+      arm_home
+    {% elif arm_mode == 2 %}
+      arm_night
+    {% elif arm_mode == 3 %}
+      arm_away
+    {% else %}
+      unknown
+    {% endif %}
+
+  # Check if we should execute
+  should_execute: >
+    {% if action_type == 'disarm' %}
+      {{ not require_disarm or is_code_valid }}
+    {% elif action_type in ['arm_home', 'arm_night', 'arm_away'] %}
+      {{ not require_arm or is_code_valid }}
+    {% else %}
+      false
+    {% endif %}
+
+  # Translation strings
   text_arm_home: "{{ 'Arm Home' if language == 'EN' else 'Armer à la maison' }}"
   text_arm_night: "{{ 'Arm Night' if language == 'EN' else 'Armer la nuit' }}"
-  text_arm_away: "{{ 'Arm Away' if language == 'EN' else 'Armer à l''extérieur' }}"
+  text_arm_away: "{{ 'Arm Away' if language == 'EN' else 'Armer à l\'extérieur' }}"
   text_disarm: "{{ 'Disarm' if language == 'EN' else 'Désarmer' }}"
-
-condition: []
+  text_invalid_code: "{{ 'Invalid code' if language == 'EN' else 'Code invalide' }}"
 
 action:
   - choose:
+      # === KEYPAD EVENT HANDLING ===
       - conditions:
           - condition: trigger
             id: keypad_event
-          - condition: template
-            value_template: "{{ trigger.event.data.command == 'arm' }}"
         sequence:
           - choose:
-              - conditions:
-                  - condition: template
-                    value_template: "{{ trigger.event.data.args.arm_mode == 0 }}"
-                  - condition: state
-                    entity_id: !input alarm_panel
-                    state: 
-                      - "armed_home"
-                      - "armed_away"
-                      - "armed_night"
-                      - "triggered"
+              # --- VALID CODE: Execute arm/disarm ---
+              - conditions: "{{ should_execute }}"
                 sequence:
-                  - service: alarm_control_panel.alarm_disarm
-                    target:
-                      entity_id: !input alarm_panel
-                    data:
-                      code: !input default_pin
-                  - service: alarm_control_panel.alarm_disarm
-                    target:
-                      entity_id: !input mirror_alarm_panel
-                    data:
-                      code: "{{ trigger.event.data.args.code if trigger.event.data.args.code != '' else mirror_default_pin }}"
-              - conditions:
-                  - condition: template
-                    value_template: "{{ trigger.event.data.args.arm_mode == 1 }}"
-                sequence:
-                  - service: alarm_control_panel.alarm_arm_home
-                    target:
-                      entity_id: !input mirror_alarm_panel
-                    data:
-                      code: "{{ trigger.event.data.args.code if trigger.event.data.args.code != '' else mirror_default_pin }}"
-              - conditions:
-                  - condition: template
-                    value_template: "{{ trigger.event.data.args.arm_mode == 2 }}"
-                sequence:
-                  - service: alarm_control_panel.alarm_arm_night
-                    target:
-                      entity_id: !input mirror_alarm_panel
-                    data:
-                      code: "{{ trigger.event.data.args.code if trigger.event.data.args.code != '' else mirror_default_pin }}"
-              - conditions:
-                  - condition: template
-                    value_template: "{{ trigger.event.data.args.arm_mode == 3 }}"
-                sequence:
-                  - service: alarm_control_panel.alarm_arm_away
-                    target:
-                      entity_id: !input mirror_alarm_panel
-                    data:
-                      code: "{{ trigger.event.data.args.code if trigger.event.data.args.code != '' else mirror_default_pin }}"
+                  # DISARM
+                  - conditions: "{{ action_type == 'disarm' }}"
+                    sequence:
+                      - service: alarm_control_panel.alarm_disarm
+                        target:
+                          entity_id: !input alarm_panel
+                        data:
+                          code: !input default_pin
+                      - service: alarm_control_panel.alarm_disarm
+                        target:
+                          entity_id: !input mirror_alarm_panel
+                        data:
+                          code: "{{ entered_code }}"
 
-      # Synchronize Frient Keypad based on Alarmo state changes
+                  # ARM HOME
+                  - conditions: "{{ action_type == 'arm_home' }}"
+                    sequence:
+                      - service: alarm_control_panel.alarm_arm_home
+                        target:
+                          entity_id: !input alarm_panel
+                        data:
+                          code: !input default_pin
+                      - service: alarm_control_panel.alarm_arm_home
+                        target:
+                          entity_id: !input mirror_alarm_panel
+                        data:
+                          code: "{{ entered_code }}"
+
+                  # ARM NIGHT
+                  - conditions: "{{ action_type == 'arm_night' }}"
+                    sequence:
+                      - service: alarm_control_panel.alarm_arm_night
+                        target:
+                          entity_id: !input alarm_panel
+                        data:
+                          code: !input default_pin
+                      - service: alarm_control_panel.alarm_arm_night
+                        target:
+                          entity_id: !input mirror_alarm_panel
+                        data:
+                          code: "{{ entered_code }}"
+
+                  # ARM AWAY
+                  - conditions: "{{ action_type == 'arm_away' }}"
+                    sequence:
+                      - service: alarm_control_panel.alarm_arm_away
+                        target:
+                          entity_id: !input alarm_panel
+                        data:
+                          code: !input default_pin
+                      - service: alarm_control_panel.alarm_arm_away
+                        target:
+                          entity_id: !input mirror_alarm_panel
+                        data:
+                          code: "{{ entered_code }}"
+
+              # --- INVALID/MISSING CODE: Immediately fix LED ---
+              - conditions: "{{ not should_execute }}"
+                sequence:
+                  # Wait briefly for keypad to process its optimistic LED change
+                  - delay:
+                      milliseconds: 100
+
+                  # Force keypad LED to match Alarmo's actual state
+                  - choose:
+                      # If Alarmo is armed, force keypad to armed (red LED)
+                      - conditions: "{{ states(mirror_alarm_panel) in ['armed_away', 'armed_home', 'armed_night', 'pending', 'triggered'] }}"
+                        sequence:
+                          - service: alarm_control_panel.alarm_arm_away
+                            target:
+                              entity_id: !input alarm_panel
+                            data:
+                              code: !input default_pin
+
+                      # If Alarmo is disarmed, force keypad to disarmed (green LED)
+                      - conditions: "{{ states(mirror_alarm_panel) == 'disarmed' }}"
+                        sequence:
+                          - service: alarm_control_panel.alarm_disarm
+                            target:
+                              entity_id: !input alarm_panel
+                            data:
+                              code: !input default_pin
+                    default: []
+
+      # === ALARMO STATE CHANGE HANDLING (Sync to Keypad) ===
       - conditions:
           - condition: trigger
             id: alarmo_state_change
@@ -175,6 +269,7 @@ action:
                       entity_id: !input alarm_panel
                     data:
                       code: !input default_pin
+
               - conditions:
                   - condition: state
                     entity_id: !input mirror_alarm_panel
@@ -185,6 +280,7 @@ action:
                       entity_id: !input alarm_panel
                     data:
                       code: !input default_pin
+
               - conditions:
                   - condition: state
                     entity_id: !input mirror_alarm_panel
@@ -195,6 +291,7 @@ action:
                       entity_id: !input alarm_panel
                     data:
                       code: !input default_pin
+
               - conditions:
                   - condition: state
                     entity_id: !input mirror_alarm_panel
@@ -205,6 +302,7 @@ action:
                       entity_id: !input alarm_panel
                     data:
                       code: !input default_pin
+
               - conditions:
                   - condition: state
                     entity_id: !input mirror_alarm_panel
