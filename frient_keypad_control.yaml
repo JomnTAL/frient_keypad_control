@@ -1,8 +1,6 @@
 blueprint:
   name: Frient KEPZB-110 Keypad for Alarmo (Fixed Sync)
-  description: |
-    Manage PIN codes and RFID badges to arm/disarm Alarmo using the Frient Keypad.
-    Alarmo state drives keypad LED (not vice versa).
+  description: Manage PIN codes and RFID badges to arm/disarm Alarmo using the Frient Keypad.
   domain: automation
   input:
     keypad:
@@ -65,12 +63,10 @@ trigger:
     id: alarmo_state_change
 
 variables:
-  # Create variables from inputs for use in templates
   mirror_panel: !input mirror_alarm_panel
   keypad_panel: !input alarm_panel
   keypad_pin: !input default_pin
   alarmo_pin: !input mirror_default_pin
-
   pin_list_var: !input pin_list
   pin_list: "{{ pin_list_var.split(';') | map('trim') | select('!=', '') | list }}"
   rfid_list_var: !input rfid_list
@@ -83,7 +79,6 @@ condition: []
 
 action:
   - choose:
-      # === KEYPAD EVENT: Only control Alarmo, NOT the keypad ===
       - conditions:
           - condition: trigger
             id: keypad_event
@@ -93,9 +88,7 @@ action:
               arm_mode: "{{ trigger.event.data.args.arm_mode | default(-1) | int }}"
               is_valid: "{{ entered_code in all_valid_codes and entered_code != '' }}"
               alarm_state: "{{ states(mirror_panel) }}"
-
           - choose:
-              # DISARM (arm_mode == 0)
               - conditions:
                   - condition: template
                     value_template: "{{ arm_mode == 0 }}"
@@ -109,7 +102,7 @@ action:
                         sequence:
                           - service: alarm_control_panel.alarm_disarm
                             target:
-                              entity_id: !input mirror_alarm_panel
+                              entity_id: "{{ mirror_panel }}"
                             data:
                               code: "{{ entered_code if entered_code != '' else alarmo_pin }}"
                       - conditions:
@@ -118,12 +111,10 @@ action:
                         sequence:
                           - service: alarm_control_panel.alarm_arm_away
                             target:
-                              entity_id: !input alarm_panel
+                              entity_id: "{{ keypad_panel }}"
                             data:
                               code: "{{ keypad_pin }}"
                     default: []
-
-              # ARM HOME (arm_mode == 1)
               - conditions:
                   - condition: template
                     value_template: "{{ arm_mode == 1 }}"
@@ -135,7 +126,7 @@ action:
                         sequence:
                           - service: alarm_control_panel.alarm_arm_home
                             target:
-                              entity_id: !input mirror_alarm_panel
+                              entity_id: "{{ mirror_panel }}"
                             data:
                               code: "{{ entered_code if entered_code != '' else alarmo_pin }}"
                       - conditions:
@@ -144,12 +135,10 @@ action:
                         sequence:
                           - service: alarm_control_panel.alarm_disarm
                             target:
-                              entity_id: !input alarm_panel
+                              entity_id: "{{ keypad_panel }}"
                             data:
                               code: "{{ keypad_pin }}"
                     default: []
-
-              # ARM NIGHT (arm_mode == 2)
               - conditions:
                   - condition: template
                     value_template: "{{ arm_mode == 2 }}"
@@ -161,7 +150,7 @@ action:
                         sequence:
                           - service: alarm_control_panel.alarm_arm_night
                             target:
-                              entity_id: !input mirror_alarm_panel
+                              entity_id: "{{ mirror_panel }}"
                             data:
                               code: "{{ entered_code if entered_code != '' else alarmo_pin }}"
                       - conditions:
@@ -170,12 +159,10 @@ action:
                         sequence:
                           - service: alarm_control_panel.alarm_disarm
                             target:
-                              entity_id: !input alarm_panel
+                              entity_id: "{{ keypad_panel }}"
                             data:
                               code: "{{ keypad_pin }}"
                     default: []
-
-              # ARM AWAY (arm_mode == 3)
               - conditions:
                   - condition: template
                     value_template: "{{ arm_mode == 3 }}"
@@ -187,7 +174,7 @@ action:
                         sequence:
                           - service: alarm_control_panel.alarm_arm_away
                             target:
-                              entity_id: !input mirror_alarm_panel
+                              entity_id: "{{ mirror_panel }}"
                             data:
                               code: "{{ entered_code if entered_code != '' else alarmo_pin }}"
                       - conditions:
@@ -196,13 +183,12 @@ action:
                         sequence:
                           - service: alarm_control_panel.alarm_disarm
                             target:
-                              entity_id: !input alarm_panel
+                              entity_id: "{{ keypad_panel }}"
                             data:
                               code: "{{ keypad_pin }}"
                     default: []
             default: []
 
-      # === ALARMO STATE CHANGE: Sync keypad LED to match Alarmo ===
       - conditions:
           - condition: trigger
             id: alarmo_state_change
@@ -210,69 +196,58 @@ action:
           - variables:
               new_state: "{{ states(mirror_panel) }}"
           - choose:
-              # DISARMED
               - conditions:
                   - condition: template
                     value_template: "{{ new_state == 'disarmed' }}"
                 sequence:
                   - service: alarm_control_panel.alarm_disarm
                     target:
-                      entity_id: !input alarm_panel
+                      entity_id: "{{ keypad_panel }}"
                     data:
                       code: "{{ keypad_pin }}"
-
-              # ARMED_HOME
               - conditions:
                   - condition: template
                     value_template: "{{ new_state == 'armed_home' }}"
                 sequence:
                   - service: alarm_control_panel.alarm_arm_home
                     target:
-                      entity_id: !input alarm_panel
+                      entity_id: "{{ keypad_panel }}"
                     data:
                       code: "{{ keypad_pin }}"
-
-              # ARMED_NIGHT
               - conditions:
                   - condition: template
                     value_template: "{{ new_state == 'armed_night' }}"
                 sequence:
                   - service: alarm_control_panel.alarm_arm_night
                     target:
-                      entity_id: !input alarm_panel
+                      entity_id: "{{ keypad_panel }}"
                     data:
                       code: "{{ keypad_pin }}"
-
-              # ARMED_AWAY
               - conditions:
                   - condition: template
                     value_template: "{{ new_state == 'armed_away' }}"
                 sequence:
                   - service: alarm_control_panel.alarm_arm_away
                     target:
-                      entity_id: !input alarm_panel
+                      entity_id: "{{ keypad_panel }}"
                     data:
                       code: "{{ keypad_pin }}"
-
-              # PENDING / ACTIVATING / ARMING (exit/entry delay)
               - conditions:
                   - condition: template
                     value_template: "{{ new_state in ['pending', 'activating', 'arming'] }}"
                 sequence:
                   - service: alarm_control_panel.alarm_arm_away
                     target:
-                      entity_id: !input alarm_panel
+                      entity_id: "{{ keypad_panel }}"
                     data:
                       code: "{{ keypad_pin }}"
-
-              # TRIGGERED
               - conditions:
                   - condition: template
                     value_template: "{{ new_state == 'triggered' }}"
                 sequence:
                   - service: alarm_control_panel.alarm_trigger
                     target:
-                      entity_id: !input alarm_panel
+                      entity_id: "{{ keypad_panel }}"
     default: []
 
 mode: single
