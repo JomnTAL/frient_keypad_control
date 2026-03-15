@@ -111,10 +111,10 @@ variables:
       false
     {% endif %}
 
-  # FIXED: Use double quotes for French strings containing apostrophes
-  text_arm_home: "{{ 'Arm Home' if language == 'EN' else \"Armer à la maison\" }}"
-  text_arm_night: "{{ 'Arm Night' if language == 'EN' else \"Armer la nuit\" }}"
-  text_arm_away: "{{ 'Arm Away' if language == 'EN' else \"Armer à l'extérieur\" }}"
+  # FIXED: Use single quotes for YAML outer, double quotes for French text with apostrophes
+  text_arm_home: '{{ "Arm Home" if language == "EN" else "Armer à la maison" }}'
+  text_arm_night: '{{ "Arm Night" if language == "EN" else "Armer la nuit" }}'
+  text_arm_away: '{{ "Arm Away" if language == "EN" else "Armer à l''extérieur" }}'
   text_disarm: "{{ 'Disarm' if language == 'EN' else 'Désarmer' }}"
   text_invalid_code: "{{ 'Invalid code' if language == 'EN' else 'Code invalide' }}"
 
