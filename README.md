@@ -34,16 +34,7 @@ The Frient KEPZB-110 has an "optimistic" LED system: when you press a button, it
 
 ### 1. Import the Blueprint
 
-**Option A:** Direct import (if hosted on GitHub):
-```yaml
-blueprint:
-  import_url: https://raw.githubusercontent.com/JomnTAL/frient-keypad-led-fix/main/frient_keypad_alarmo_fix.yaml
-```
-
-**Option B:** Manual import:
-1. Copy the blueprint YAML from this repository
-2. Go to **Settings** → **Automations & Scenes** → **Blueprints** → **Create Blueprint**
-3. Paste and save
+In **Blueprints**, import URL: https://raw.githubusercontent.com/JomnTAL/frient-keypad-led-fix/main/frient_keypad_alarmo_fix.yaml
 
 ### 2. Create the Automation
 
